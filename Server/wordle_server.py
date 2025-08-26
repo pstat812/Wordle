@@ -9,11 +9,59 @@ secure from the client until game completion.
 
 import random
 import uuid
+import logging
+import logging.handlers
+import os
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 from enum import Enum
 from flask import Flask, request, jsonify
 from game_settings import WORD_LIST, DEFAULT_MAX_ROUNDS
+
+
+def setup_logging():
+    """Configure logging for the Wordle server."""
+    # Create logs directory if it doesn't exist
+    os.makedirs('logs', exist_ok=True)
+    
+    # Configure logging format
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    
+    # Create logger
+    logger = logging.getLogger('wordle_server')
+    logger.setLevel(logging.INFO)
+    
+    # Clear any existing handlers
+    logger.handlers.clear()
+    
+    # Create file handler with rotation (keeps last 5 files, 10MB each)
+    file_handler = logging.handlers.RotatingFileHandler(
+        'logs/wordle_server.log',
+        maxBytes=10*1024*1024,  # 10MB
+        backupCount=5
+    )
+    file_handler.setLevel(logging.INFO)
+    file_handler.setFormatter(logging.Formatter(log_format))
+    
+    # Create console handler for immediate feedback
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(logging.Formatter(log_format))
+    
+    # Add handlers to logger
+    logger.addHandler(file_handler)
+    logger.addHandler(console_handler)
+    
+    # Also configure Flask's logger to reduce noise
+    flask_logger = logging.getLogger('werkzeug')
+    flask_logger.setLevel(logging.WARNING)
+    
+    return logger
+
+
+# Create logger instance
+logger = setup_logging()
 
 
 class LetterStatus(Enum):
@@ -52,6 +100,7 @@ class WordleServer:
     def __init__(self):
         self.games: Dict[str, Dict] = {}  # Store active games by game_id
         self.word_list = WORD_LIST.copy()
+        logger.info("Wordle server initialized with %d words", len(self.word_list))
     
     def create_new_game(self, max_rounds: Optional[int] = None) -> str:
         """
@@ -82,6 +131,11 @@ class WordleServer:
         }
         
         self.games[game_id] = game_data
+        
+        # Log game creation (without revealing the answer)
+        logger.info("New game created - ID: %s, max_rounds: %d, active_games: %d", 
+                   game_id[:8], max_rounds, len(self.games))
+        
         return game_id
     
     def get_game_state(self, game_id: str) -> Optional[GameState]:
@@ -145,6 +199,8 @@ class WordleServer:
             return False, "Guess must contain only letters"
         
         if normalized_guess not in self.word_list:
+            logger.warning("Invalid word attempted for game %s: %s - not in word list", 
+                          game_id[:8], normalized_guess)
             return False, "Word not in word list"
         
         return True, ""
@@ -162,11 +218,17 @@ class WordleServer:
         """
         is_valid, error = self.is_valid_guess(game_id, guess)
         if not is_valid:
+            logger.warning("Invalid guess for game %s: %s - Error: %s", 
+                          game_id[:8], guess, error)
             return None
         
         game = self.games[game_id]
         normalized_guess = guess.strip().upper()
         target_word = game["target_word"]
+        
+        # Log the guess attempt
+        logger.info("Guess submitted for game %s: %s (round %d/%d)", 
+                   game_id[:8], normalized_guess, game["current_round"] + 1, game["max_rounds"])
         
         # Evaluate guess using the same algorithm as the original game
         evaluations = self._evaluate_guess_against_target(normalized_guess, target_word)
@@ -183,10 +245,14 @@ class WordleServer:
         if normalized_guess == target_word:
             game["won"] = True
             game["game_over"] = True
+            logger.info("Game %s WON! Answer: %s, rounds: %d", 
+                       game_id[:8], target_word, game["current_round"])
         
         # Check loss condition
         elif game["current_round"] >= game["max_rounds"]:
             game["game_over"] = True
+            logger.info("Game %s LOST! Answer: %s, max rounds reached", 
+                       game_id[:8], target_word)
         
         return self.get_game_state(game_id)
     
@@ -254,7 +320,10 @@ class WordleServer:
         """
         if game_id in self.games:
             del self.games[game_id]
+            logger.info("Game %s deleted, active_games: %d", game_id[:8], len(self.games))
             return True
+        
+        logger.warning("Attempted to delete non-existent game: %s", game_id[:8])
         return False
 
 
@@ -266,18 +335,26 @@ server = WordleServer()
 @app.route('/api/new_game', methods=['POST'])
 def new_game():
     """Create a new game session."""
+    client_ip = request.remote_addr
     data = request.get_json() or {}
     max_rounds = data.get('max_rounds')
+    
+    logger.info("New game request from %s, max_rounds: %s", client_ip, max_rounds)
     
     try:
         game_id = server.create_new_game(max_rounds)
         state = server.get_game_state(game_id)
+        
+        logger.info("New game created successfully for %s - Game ID: %s", 
+                   client_ip, game_id[:8])
+        
         return jsonify({
             'success': True,
             'game_id': game_id,
             'state': asdict(state)
         })
     except Exception as e:
+        logger.error("Failed to create new game for %s: %s", client_ip, str(e))
         return jsonify({
             'success': False,
             'error': str(e)
@@ -287,8 +364,13 @@ def new_game():
 @app.route('/api/game/<game_id>/state', methods=['GET'])
 def get_state(game_id):
     """Get current game state."""
+    client_ip = request.remote_addr
+    logger.info("Game state request from %s for game %s", client_ip, game_id[:8])
+    
     state = server.get_game_state(game_id)
     if state is None:
+        logger.warning("Game state request for non-existent game %s from %s", 
+                      game_id[:8], client_ip)
         return jsonify({
             'success': False,
             'error': 'Game not found'
@@ -303,18 +385,26 @@ def get_state(game_id):
 @app.route('/api/game/<game_id>/guess', methods=['POST'])
 def make_guess(game_id):
     """Submit a guess for validation and evaluation."""
+    client_ip = request.remote_addr
     data = request.get_json()
+    
     if not data or 'guess' not in data:
+        logger.warning("Invalid guess request from %s for game %s: missing guess", 
+                      client_ip, game_id[:8])
         return jsonify({
             'success': False,
             'error': 'Guess is required'
         }), 400
     
     guess = data['guess']
+    logger.info("Guess request from %s for game %s: %s", 
+               client_ip, game_id[:8], guess)
     
     # Validate guess first
     is_valid, error = server.is_valid_guess(game_id, guess)
     if not is_valid:
+        logger.warning("Invalid guess from %s for game %s: %s - %s", 
+                      client_ip, game_id[:8], guess, error)
         return jsonify({
             'success': False,
             'error': error
@@ -323,6 +413,8 @@ def make_guess(game_id):
     # Process guess
     state = server.make_guess(game_id, guess)
     if state is None:
+        logger.error("Failed to process guess from %s for game %s: %s", 
+                    client_ip, game_id[:8], guess)
         return jsonify({
             'success': False,
             'error': 'Failed to process guess'
@@ -337,6 +429,9 @@ def make_guess(game_id):
 @app.route('/api/game/<game_id>', methods=['DELETE'])
 def delete_game(game_id):
     """Delete a completed game session."""
+    client_ip = request.remote_addr
+    logger.info("Delete game request from %s for game %s", client_ip, game_id[:8])
+    
     success = server.delete_game(game_id)
     return jsonify({
         'success': success
@@ -346,19 +441,36 @@ def delete_game(game_id):
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint."""
+    active_games = len(server.games)
+    logger.info("Health check - Active games: %d", active_games)
+    
     return jsonify({
         'status': 'healthy',
-        'active_games': len(server.games)
+        'active_games': active_games
     })
 
 
 if __name__ == '__main__':
-    print("Starting Wordle Server...")
-    print("API endpoints:")
-    print("  POST /api/new_game - Create new game")
-    print("  GET /api/game/<id>/state - Get game state") 
-    print("  POST /api/game/<id>/guess - Submit guess")
-    print("  DELETE /api/game/<id> - Delete game")
-    print("  GET /api/health - Health check")
+    logger.info("=" * 50)
+    logger.info("Starting Wordle Server...")
+    logger.info("Server configuration:")
+    logger.info("  Host: 127.0.0.1")
+    logger.info("  Port: 5000")
+    logger.info("  Word list size: %d", len(WORD_LIST))
+    logger.info("  Default max rounds: %d", DEFAULT_MAX_ROUNDS)
+    logger.info("API endpoints:")
+    logger.info("  POST /api/new_game - Create new game")
+    logger.info("  GET /api/game/<id>/state - Get game state")
+    logger.info("  POST /api/game/<id>/guess - Submit guess")
+    logger.info("  DELETE /api/game/<id> - Delete game")
+    logger.info("  GET /api/health - Health check")
+    logger.info("=" * 50)
     
-    app.run(host='127.0.0.1', port=5000, debug=True)
+    try:
+        app.run(host='127.0.0.1', port=5000, debug=False)  # Turn off debug for cleaner logs
+    except KeyboardInterrupt:
+        logger.info("Server shutdown requested by user")
+    except Exception as e:
+        logger.error("Server crashed: %s", str(e))
+    finally:
+        logger.info("Wordle server stopped")

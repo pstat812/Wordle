@@ -20,6 +20,8 @@ wordle_task/
 │   ├── main.py              # Client entry point
 │   └── wordle_client.py     # GUI implementation and API communication
 ├── Server/
+│   ├── logs/                # Server log files 
+│   │   └── wordle_server.log #  log files
 │   ├── main.py              # Server entry point
 │   ├── wordle_server.py     # Flask server and API endpoints
 │   └── game_settings.py     # Game configuration and word list
@@ -175,4 +177,5 @@ The server runs on `127.0.0.1:5000` by default. To change this, modify the serve
 
 
 ## The Bells and Whistles
-1. **Dual input support**: Both GUI virtual keyboard and physical keyboard input
+1. **Dual input support**: Both GUI virtual keyboard and physical keyboard input to simulate the origin game on Web
+2. **logging system**: server monitoring, easier for error logging with timestamps for troubleshooting
