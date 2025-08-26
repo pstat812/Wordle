@@ -15,7 +15,7 @@ without touching core business logic.
 from typing import List, Final
 
 # Core Game Configuration Constants
-DEFAULT_MAX_ROUNDS: Final[int] = 6
+DEFAULT_MAX_ROUNDS: Final[int] = 10
 """
 Default maximum number of guess attempts allowed per game.
 Type: Final[int] - Immutable to prevent accidental modification
