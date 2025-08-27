@@ -18,11 +18,13 @@ A Python implementation of the classic Wordle game featuring both single-player 
 - Session-based authentication
 - Comprehensive error handling and logging
 
-### Next Move
-- Display player game statistic e.g win count , play count, winrate, highest countinous win
-- UI Update e.g darkmode, customize HIT, PRESENT, MISS color
-- Add new rules to multiple player mode to enrich the game 
-- History function to show player gameplay history
+### Planned Enhancements
+- Implement comprehensive player statistics tracking (win count, games played, win rate, longest win streak)
+- Enhance user interface with dark mode support and customizable color schemes for game feedback (Hit, Present, Miss indicators)
+- Expand multiplayer gameplay with additional competitive rule variations and game modes
+- Add gameplay history feature to review past matches and performance
+- Implement session timeout mechanism to prevent game stalling and prevent players disconnection
+- Critical fix: Resolve concurrent login vulnerability allowing duplicate sessions for single username
 
 ## Game Rules and Mechanics
 

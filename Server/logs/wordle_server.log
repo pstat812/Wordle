@@ -1,0 +1,42 @@
+2025-08-27 20:50:33,019 - wordle_server - INFO - Wordle server initialized with 10 words
+2025-08-27 20:51:09,133 - wordle_server - INFO - Login request from 127.0.0.1 for user: tat6
+2025-08-27 20:51:09,142 - wordle_server - INFO - User authenticated successfully: tat6
+2025-08-27 20:51:09,791 - wordle_server - INFO - Login request from 127.0.0.1 for user: tat7
+2025-08-27 20:51:09,795 - wordle_server - INFO - User authenticated successfully: tat7
+2025-08-27 20:51:11,217 - wordle_server - INFO - Room join request from 127.0.0.1: user tat6 to room 1
+2025-08-27 20:51:11,218 - wordle_server - INFO - User tat6 joined room 1
+2025-08-27 20:51:11,219 - wordle_server - INFO - User tat6 joined room 1 successfully
+2025-08-27 20:51:12,083 - wordle_server - INFO - Room join request from 127.0.0.1: user tat7 to room 1
+2025-08-27 20:51:12,084 - wordle_server - INFO - User tat7 joined room 1
+2025-08-27 20:51:12,085 - wordle_server - INFO - Multiplayer game started - ID: b8941a73, Room: 1, Players: ['tat6', 'tat7'], Word: HEART
+2025-08-27 20:51:12,085 - wordle_server - INFO - User tat7 joined room 1 successfully
+2025-08-27 20:51:12,403 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:12,518 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:13,449 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:13,576 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:14,454 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:14,593 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:15,475 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:15,615 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:16,484 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:16,621 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:17,506 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:17,631 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:18,137 - wordle_server - INFO - Guess request from 127.0.0.1 for game b8941a73: ABOUT
+2025-08-27 20:51:18,512 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:18,652 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:19,522 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:19,662 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:20,528 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:20,680 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:21,211 - wordle_server - INFO - Guess request from 127.0.0.1 for game b8941a73: HEART
+2025-08-27 20:51:21,228 - wordle_server - INFO - Multiplayer game b8941a73 WON by tat6! Word: HEART
+2025-08-27 20:51:21,536 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:21,693 - wordle_server - INFO - Game state request from 127.0.0.1 for game b8941a73
+2025-08-27 20:51:27,152 - wordle_server - INFO - Room leave request from 127.0.0.1: user tat6 from room 1
+2025-08-27 20:51:27,152 - wordle_server - INFO - User tat6 left room 1
+2025-08-27 20:51:27,223 - wordle_server - INFO - Proactively cleaning up ended game b8941a73 in room 1
+2025-08-27 20:51:27,223 - wordle_server - INFO - Room 1 cleaned up after game b8941a73 completion
+2025-08-27 20:51:27,223 - wordle_server - INFO - Game b8941a73 cleaned up and removed
+2025-08-27 20:51:31,968 - wordle_server - INFO - Room leave request from 127.0.0.1: user tat7 from room 1
+2025-08-27 20:51:31,969 - wordle_server - INFO - User tat7 left room 1
