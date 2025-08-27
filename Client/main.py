@@ -2,7 +2,7 @@
 """
 Wordle Client Launcher
 
-Simple launcher for the Wordle game client.
+Launcher for the Wordle game client.
 """
 
 import sys
@@ -27,10 +27,73 @@ def main():
         sys.exit(1)
     
     try:
-        from wordle_client import main as run_client
-        print("Launching Wordle Game Client...")
+        print("Launching Multiplayer Wordle Game Client...")
         print("Make sure the server is running at http://127.0.0.1:5000")
-        run_client()
+        
+        # Import required modules
+        from login_page import LoginPage
+        from lobby_page import LobbyPage
+        from multiplayer_client import MultiplayerClient
+        from wordle_client import WordleClient
+        
+        # Create main window
+        root = tk.Tk()
+        
+        # Application state
+        current_page = None
+        current_username = None
+        
+        def show_login():
+            """Show login page."""
+            nonlocal current_page
+            if current_page:
+                try:
+                    current_page.destroy()
+                except (AttributeError, tk.TclError):
+                    # Page may have already been destroyed or not have destroy method
+                    pass
+            current_page = LoginPage(root, on_login_success=show_lobby, on_single_player=show_single_player)
+        
+        def show_single_player():
+            """Show single player game."""
+            nonlocal current_page
+            if current_page:
+                try:
+                    current_page.destroy()
+                except (AttributeError, tk.TclError):
+                    # Page may have already been destroyed or not have destroy method
+                    pass
+            current_page = WordleClient(root, on_exit=show_login)
+        
+        def show_lobby(username):
+            """Show lobby page after successful login."""
+            nonlocal current_page, current_username
+            current_username = username
+            if current_page:
+                try:
+                    current_page.destroy()
+                except (AttributeError, tk.TclError):
+                    # Page may have already been destroyed or not have destroy method
+                    pass
+            current_page = LobbyPage(root, username, on_game_start=start_game, on_logout=show_login)
+        
+        def start_game(username, game_data):
+            """Start multiplayer game."""
+            nonlocal current_page
+            if current_page:
+                try:
+                    current_page.destroy()
+                except (AttributeError, tk.TclError):
+                    # Page may have already been destroyed or not have destroy method
+                    pass
+            current_page = MultiplayerClient(root, username, game_data, on_game_end=lambda: show_lobby(username))
+        
+        # Start with login page
+        show_login()
+        
+        # Start main loop
+        root.mainloop()
+        
     except ImportError as e:
         print(f"Error: Could not import client module: {e}")
         print("Please ensure all required files are in the Client directory.")

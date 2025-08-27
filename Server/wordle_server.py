@@ -12,12 +12,12 @@ import uuid
 import logging
 import logging.handlers
 import os
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, asdict
 from enum import Enum
 from flask import Flask, request, jsonify
 from game_settings import WORD_LIST, DEFAULT_MAX_ROUNDS
+from database import get_db_manager
 
 
 def setup_logging():
@@ -84,6 +84,7 @@ class GameState:
     guess_results: List[List[Tuple[str, str]]]  # Letter status as string for JSON serialization
     letter_status: Dict[str, str]
     answer: Optional[str] = None  # Only included when game is over
+    entire_game_over: bool = False  # True when entire multiplayer game is finished
 
 
 class WordleServer:
@@ -95,11 +96,17 @@ class WordleServer:
     - Word selection and secure answer storage
     - Guess validation and evaluation
     - Game state management without exposing answers to clients
+    - Multiplayer room management
+    - User authentication
     """
     
     def __init__(self):
         self.games: Dict[str, Dict] = {}  # Store active games by game_id
+        self.rooms: Dict[int, Dict] = {1: {"players": [], "ready": {}, "game_id": None}, 
+                                      2: {"players": [], "ready": {}, "game_id": None}, 
+                                      3: {"players": [], "ready": {}, "game_id": None}}  # Room management
         self.word_list = WORD_LIST.copy()
+        self.db_manager = get_db_manager()
         logger.info("Wordle server initialized with %d words", len(self.word_list))
     
     def create_new_game(self, max_rounds: Optional[int] = None) -> str:
@@ -256,6 +263,360 @@ class WordleServer:
         
         return self.get_game_state(game_id)
     
+    def join_room(self, room_id: int, username: str) -> Dict[str, any]:
+        """Join a room for multiplayer."""
+        if room_id not in self.rooms:
+            return {"success": False, "error": "Room does not exist"}
+        
+        room = self.rooms[room_id]
+        
+        # Check if there's an ended game in this room and clean it up
+        if room["game_id"] and room["game_id"] in self.games:
+            game = self.games[room["game_id"]]
+            if all(p["game_over"] for p in game["players"].values()):
+                logger.info("Cleaning up ended game %s when user %s joins room %d", 
+                           room["game_id"][:8], username, room_id)
+                self.cleanup_completed_game(room["game_id"])
+        
+        # After cleanup, check room capacity (but ignore if user was in the ended game)
+        current_active_players = [p for p in room["players"] if p != username]
+        if len(current_active_players) >= 2:
+            return {"success": False, "error": "Room is full"}
+        
+        # Remove user from room["players"] if they were there from previous game
+        if username in room["players"]:
+            room["players"].remove(username)
+        if username in room["ready"]:
+            del room["ready"][username]
+        
+        # Remove user from other rooms first
+        for rid, r in self.rooms.items():
+            if username in r["players"]:
+                r["players"].remove(username)
+                if username in r["ready"]:
+                    del r["ready"][username]
+        
+        room["players"].append(username)
+        room["ready"][username] = True  # Auto-ready when joining
+        
+        logger.info("User %s joined room %d", username, room_id)
+        
+        # Check if room is now full (2 players) and auto-start game
+        if len(room["players"]) == 2:
+            # Start game immediately
+            game_data = self.start_multiplayer_game(room_id)
+            return {"success": True, "game_starting": True, "game_data": game_data}
+        
+        return {"success": True, "game_starting": False}
+    
+    def leave_room(self, room_id: int, username: str) -> Dict[str, bool]:
+        """Leave a room."""
+        if room_id not in self.rooms:
+            return {"success": False, "error": "Room does not exist"}
+        
+        room = self.rooms[room_id]
+        
+        if username in room["players"]:
+            room["players"].remove(username)
+        
+        if username in room["ready"]:
+            del room["ready"][username]
+        
+        # If there's a completed game and room is now empty, clean it up
+        if room["game_id"] and len(room["players"]) == 0:
+            if room["game_id"] in self.games:
+                game = self.games[room["game_id"]]
+                if all(p["game_over"] for p in game["players"].values()):
+                    self.cleanup_completed_game(room["game_id"])
+        
+        logger.info("User %s left room %d", username, room_id)
+        return {"success": True}
+    
+
+    
+    def start_multiplayer_game(self, room_id: int) -> Dict[str, any]:
+        """Start a multiplayer game for a room."""
+        room = self.rooms[room_id]
+        players = room["players"]
+        
+        if len(players) != 2:
+            return {"error": "Need exactly 2 players"}
+        
+        game_id = str(uuid.uuid4())
+        
+        # Automatically select random words for each player (same word for both)
+        target_word = random.choice(self.word_list)
+        
+        # Initialize multiplayer game state
+        game_data = {
+            "game_type": "multiplayer",
+            "room_id": room_id,
+            "players": {
+                players[0]: {
+                    "selected_word": target_word,
+                    "current_round": 0,
+                    "max_rounds": DEFAULT_MAX_ROUNDS,
+                    "game_over": False,
+                    "won": False,
+                    "guesses": [],
+                    "guess_results": [],
+                    "letter_status": {letter: LetterStatus.UNUSED.value for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"}
+                },
+                players[1]: {
+                    "selected_word": target_word,
+                    "current_round": 0,
+                    "max_rounds": DEFAULT_MAX_ROUNDS,
+                    "game_over": False,
+                    "won": False,
+                    "guesses": [],
+                    "guess_results": [],
+                    "letter_status": {letter: LetterStatus.UNUSED.value for letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"}
+                }
+            },
+
+            "game_started": True,  # Game starts immediately
+            "winner": None,
+            "target_word": target_word  # Store the common target word
+        }
+        
+        self.games[game_id] = game_data
+        room["game_id"] = game_id
+        
+        logger.info("Multiplayer game started - ID: %s, Room: %d, Players: %s, Word: %s", 
+                   game_id[:8], room_id, players, target_word)
+        
+        # Return game data with opponent info for each player
+        return {
+            "game_id": game_id,
+            "room_id": room_id,
+            "players": players,
+            "target_word": target_word
+        }
+    
+
+    
+    def make_guess_multiplayer(self, game_id: str, username: str, guess: str) -> tuple[Optional[GameState], str]:
+        """
+        Process a guess in multiplayer game.
+        
+        Returns:
+            tuple: (GameState or None, error_message)
+        """
+        if game_id not in self.games:
+            return None, "Game not found"
+        
+        game = self.games[game_id]
+        
+        if username not in game["players"]:
+            return None, "Player not in game"
+        
+        player_data = game["players"][username]
+        
+        if not player_data["selected_word"]:
+            return None, "Word not selected"
+        
+        if player_data["game_over"]:
+            return None, "You have already finished the game"
+        
+        # Check if player has used all attempts
+        if player_data["current_round"] >= player_data["max_rounds"]:
+            return None, "You have used all your attempts"
+        
+        # Validate guess
+        normalized_guess = guess.strip().upper()
+        
+        if len(normalized_guess) != 5 or not normalized_guess.isalpha():
+            return None, "Guess must be exactly 5 letters"
+        
+        if normalized_guess not in self.word_list:
+            return None, "Word not in word list"
+        
+        target_word = player_data["selected_word"]
+        
+        # Evaluate guess
+        evaluations = self._evaluate_guess_against_target(normalized_guess, target_word)
+        
+        # Update player state
+        player_data["current_round"] += 1
+        player_data["guesses"].append(normalized_guess)
+        player_data["guess_results"].append([(letter, status.value) for letter, status in evaluations])
+        
+        # Update letter status
+        self._update_letter_status(player_data["letter_status"], evaluations)
+        
+        # Check win condition
+        if normalized_guess == target_word:
+            player_data["won"] = True
+            player_data["game_over"] = True
+            game["winner"] = username
+            
+            # Mark opponent as lost
+            for other_user, other_data in game["players"].items():
+                if other_user != username:
+                    other_data["game_over"] = True
+                    other_data["won"] = False
+            
+            # Update user stats
+            self.db_manager.update_user_stats(username, True)
+            for other_user in game["players"]:
+                if other_user != username:
+                    self.db_manager.update_user_stats(other_user, False)
+            
+            # Don't clean up immediately - let both players see the end state
+            # Cleanup will happen when players leave or after timeout
+            
+            logger.info("Multiplayer game %s WON by %s! Word: %s", 
+                       game_id[:8], username, target_word)
+        
+        # Check if player exhausted attempts without winning
+        elif player_data["current_round"] >= player_data["max_rounds"]:
+            player_data["game_over"] = True
+            
+            # Check if both players are done (either won or exhausted attempts)
+            all_players_done = True
+            for p in game["players"].values():
+                if not p["game_over"]:
+                    all_players_done = False
+                    break
+            
+            if all_players_done:
+                # Determine winner by HIT count if no one guessed correctly
+                if not game.get("winner"):
+                    self._determine_winner_by_hits(game)
+                
+                # Don't clean up immediately - let both players see the end state  
+                # Cleanup will happen when players leave or after timeout
+        
+        return self.get_multiplayer_game_state(game_id, username), "Success"
+    
+    def _determine_winner_by_hits(self, game: Dict[str, Any]) -> None:
+        """
+        Determine winner based on HIT count when both players exhaust attempts.
+        Updates game state and database accordingly.
+        """
+        player_hit_counts = {}
+        
+        # Calculate HIT count for each player
+        for username, player_data in game["players"].items():
+            hit_count = 0
+            for guess_result in player_data["guess_results"]:
+                for letter, status in guess_result:
+                    if status == LetterStatus.HIT.value:
+                        hit_count += 1
+            player_hit_counts[username] = hit_count
+        
+        # Find the maximum HIT count
+        max_hits = max(player_hit_counts.values())
+        winners = [username for username, hits in player_hit_counts.items() if hits == max_hits]
+        
+        if len(winners) == 1:
+            # Single winner based on HIT count
+            winner = winners[0]
+            game["winner"] = winner
+            game["players"][winner]["won"] = True
+            
+            # Update database stats
+            self.db_manager.update_user_stats(winner, True)
+            for username in game["players"]:
+                if username != winner:
+                    self.db_manager.update_user_stats(username, False)
+            
+            logger.info("Multiplayer game %s decided by HIT count: %s wins with %d HITs", 
+                       game.get("game_id", "")[:8], winner, max_hits)
+        else:
+            # Draw - multiple players with same HIT count
+            game["winner"] = "DRAW"
+            for username in game["players"]:
+                game["players"][username]["won"] = False
+            
+            # Update games_played for both players, but no wins awarded
+            for username in game["players"]:
+                self.db_manager.update_user_stats(username, False)
+            
+            logger.info("Multiplayer game %s ended in DRAW: all players had %d HITs", 
+                       game.get("game_id", "")[:8], max_hits)
+    
+    def cleanup_completed_game(self, game_id: str) -> None:
+        """Clean up completed game and reset room."""
+        if game_id not in self.games:
+            return
+        
+        game = self.games[game_id]
+        room_id = game.get("room_id")
+        
+        # Reset the room
+        if room_id and room_id in self.rooms:
+            room = self.rooms[room_id]
+            room["players"] = []
+            room["ready"] = {}
+            room["game_id"] = None
+            logger.info("Room %d cleaned up after game %s completion", room_id, game_id[:8])
+        
+        # Remove the game
+        del self.games[game_id]
+        logger.info("Game %s cleaned up and removed", game_id[:8])
+    
+    def get_multiplayer_game_state(self, game_id: str, username: str) -> Optional[GameState]:
+        """Get game state for multiplayer game."""
+        if game_id not in self.games:
+            return None
+        
+        game = self.games[game_id]
+        
+        if username not in game["players"]:
+            return None
+        
+        player_data = game["players"][username]
+        
+        # Include answer only if entire game is over
+        answer = player_data["selected_word"] if (game.get("winner") is not None or all(p["game_over"] for p in game["players"].values())) else None
+        
+        # Check if opponent won
+        opponent_won = game["winner"] is not None and game["winner"] != username
+        
+        # Check if entire game is over (all players finished or someone won)
+        entire_game_over = game.get("winner") is not None or all(p["game_over"] for p in game["players"].values())
+        
+        return GameState(
+            game_id=game_id,
+            current_round=player_data["current_round"],
+            max_rounds=player_data["max_rounds"],
+            game_over=player_data["game_over"],
+            won=player_data["won"],
+            guesses=player_data["guesses"].copy(),
+            guess_results=player_data["guess_results"].copy(),
+            letter_status=player_data["letter_status"].copy(),
+            answer=answer,
+            entire_game_over=entire_game_over
+        )
+    
+    def get_rooms_status(self) -> Dict[str, Dict]:
+        """Get status of all rooms."""
+        result = {}
+        for room_id, room in self.rooms.items():
+            # Check for ended games and clean them up proactively
+            if room["game_id"] and room["game_id"] in self.games:
+                game = self.games[room["game_id"]]
+                if all(p["game_over"] for p in game["players"].values()):
+                    logger.info("Proactively cleaning up ended game %s in room %d", 
+                               room["game_id"][:8], room_id)
+                    self.cleanup_completed_game(room["game_id"])
+            
+            room_data = {
+                "players": room["players"],
+                "ready": room["ready"],
+                "game_id": room["game_id"]
+            }
+            
+            # If there's an active game, include the target word
+            if room["game_id"] and room["game_id"] in self.games:
+                game = self.games[room["game_id"]]
+                room_data["target_word"] = game.get("target_word")
+            
+            result[str(room_id)] = room_data
+        
+        return result
+    
     def _evaluate_guess_against_target(self, guess: str, target: str) -> List[Tuple[str, LetterStatus]]:
         """
         Implements the authentic Wordle letter evaluation algorithm.
@@ -330,6 +691,7 @@ class WordleServer:
 # Flask REST API setup
 app = Flask(__name__)
 server = WordleServer()
+db_manager = get_db_manager()
 
 
 @app.route('/api/new_game', methods=['POST'])
@@ -361,69 +723,7 @@ def new_game():
         }), 400
 
 
-@app.route('/api/game/<game_id>/state', methods=['GET'])
-def get_state(game_id):
-    """Get current game state."""
-    client_ip = request.remote_addr
-    logger.info("Game state request from %s for game %s", client_ip, game_id[:8])
-    
-    state = server.get_game_state(game_id)
-    if state is None:
-        logger.warning("Game state request for non-existent game %s from %s", 
-                      game_id[:8], client_ip)
-        return jsonify({
-            'success': False,
-            'error': 'Game not found'
-        }), 404
-    
-    return jsonify({
-        'success': True,
-        'state': asdict(state)
-    })
 
-
-@app.route('/api/game/<game_id>/guess', methods=['POST'])
-def make_guess(game_id):
-    """Submit a guess for validation and evaluation."""
-    client_ip = request.remote_addr
-    data = request.get_json()
-    
-    if not data or 'guess' not in data:
-        logger.warning("Invalid guess request from %s for game %s: missing guess", 
-                      client_ip, game_id[:8])
-        return jsonify({
-            'success': False,
-            'error': 'Guess is required'
-        }), 400
-    
-    guess = data['guess']
-    logger.info("Guess request from %s for game %s: %s", 
-               client_ip, game_id[:8], guess)
-    
-    # Validate guess first
-    is_valid, error = server.is_valid_guess(game_id, guess)
-    if not is_valid:
-        logger.warning("Invalid guess from %s for game %s: %s - %s", 
-                      client_ip, game_id[:8], guess, error)
-        return jsonify({
-            'success': False,
-            'error': error
-        }), 400
-    
-    # Process guess
-    state = server.make_guess(game_id, guess)
-    if state is None:
-        logger.error("Failed to process guess from %s for game %s: %s", 
-                    client_ip, game_id[:8], guess)
-        return jsonify({
-            'success': False,
-            'error': 'Failed to process guess'
-        }), 500
-    
-    return jsonify({
-        'success': True,
-        'state': asdict(state)
-    })
 
 
 @app.route('/api/game/<game_id>', methods=['DELETE'])
@@ -447,6 +747,261 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'active_games': active_games
+    })
+
+
+# Authentication endpoints
+@app.route('/api/auth/register', methods=['POST'])
+def register():
+    """Register a new user."""
+    client_ip = request.remote_addr
+    data = request.get_json()
+    
+    if not data or 'username' not in data or 'password' not in data:
+        logger.warning("Invalid registration request from %s: missing data", client_ip)
+        return jsonify({
+            'success': False,
+            'error': 'Username and password are required'
+        }), 400
+    
+    username = data['username']
+    password = data['password']
+    
+    logger.info("Registration request from %s for user: %s", client_ip, username)
+    
+    result = db_manager.register_user(username, password)
+    
+    if result['success']:
+        logger.info("User registered successfully: %s", username)
+        return jsonify(result)
+    else:
+        logger.warning("Registration failed for user %s: %s", username, result['error'])
+        return jsonify(result), 400
+
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """Authenticate user login."""
+    client_ip = request.remote_addr
+    data = request.get_json()
+    
+    if not data or 'username' not in data or 'password' not in data:
+        logger.warning("Invalid login request from %s: missing data", client_ip)
+        return jsonify({
+            'success': False,
+            'error': 'Username and password are required'
+        }), 400
+    
+    username = data['username']
+    password = data['password']
+    
+    logger.info("Login request from %s for user: %s", client_ip, username)
+    
+    result = db_manager.authenticate_user(username, password)
+    
+    if result['success']:
+        return jsonify(result)
+    else:
+        logger.warning("Authentication failed for user %s: %s", username, result['error'])
+        return jsonify(result), 401
+
+
+# Room management endpoints
+@app.route('/api/rooms', methods=['GET'])
+def get_rooms():
+    """Get status of all rooms."""
+    rooms_status = server.get_rooms_status()
+    return jsonify({
+        'success': True,
+        'rooms': rooms_status
+    })
+
+
+@app.route('/api/rooms/<int:room_id>/join', methods=['POST'])
+def join_room(room_id):
+    """Join a room."""
+    client_ip = request.remote_addr
+    data = request.get_json()
+    
+    if not data or 'username' not in data:
+        return jsonify({
+            'success': False,
+            'error': 'Username is required'
+        }), 400
+    
+    username = data['username']
+    logger.info("Room join request from %s: user %s to room %d", client_ip, username, room_id)
+    
+    result = server.join_room(room_id, username)
+    
+    if result['success']:
+        logger.info("User %s joined room %d successfully", username, room_id)
+    else:
+        logger.warning("User %s failed to join room %d: %s", username, room_id, result['error'])
+    
+    return jsonify(result)
+
+
+@app.route('/api/rooms/<int:room_id>/leave', methods=['POST'])
+def leave_room(room_id):
+    """Leave a room."""
+    client_ip = request.remote_addr
+    data = request.get_json()
+    
+    if not data or 'username' not in data:
+        return jsonify({
+            'success': False,
+            'error': 'Username is required'
+        }), 400
+    
+    username = data['username']
+    logger.info("Room leave request from %s: user %s from room %d", client_ip, username, room_id)
+    
+    result = server.leave_room(room_id, username)
+    return jsonify(result)
+
+
+
+
+
+# Multiplayer game endpoints - word selection is now automatic
+
+@app.route('/api/game/<game_id>/opponent', methods=['GET'])
+def get_opponent_info(game_id):
+    """Get opponent information for multiplayer game."""
+    client_ip = request.remote_addr
+    username = request.args.get('username')
+    
+    if not username:
+        return jsonify({
+            'success': False,
+            'error': 'Username is required'
+        }), 400
+    
+    if game_id not in server.games:
+        return jsonify({
+            'success': False,
+            'error': 'Game not found'
+        }), 404
+    
+    game = server.games[game_id]
+    
+    if username not in game["players"]:
+        return jsonify({
+            'success': False,
+            'error': 'Player not in game'
+        }), 400
+    
+    # Get opponent name
+    opponent = None
+    for player in game["players"]:
+        if player != username:
+            opponent = player
+            break
+    
+    return jsonify({
+        'success': True,
+        'opponent': opponent,
+        'target_word': game.get("target_word", "UNKNOWN"),
+        'winner': game.get("winner")
+    })
+
+
+# Override existing guess endpoint to handle both single and multiplayer
+@app.route('/api/game/<game_id>/guess', methods=['POST'])
+def make_guess_endpoint(game_id):
+    """Submit a guess for validation and evaluation (supports both single and multiplayer)."""
+    client_ip = request.remote_addr
+    data = request.get_json()
+    
+    if not data or 'guess' not in data:
+        logger.warning("Invalid guess request from %s for game %s: missing guess", 
+                      client_ip, game_id[:8])
+        return jsonify({
+            'success': False,
+            'error': 'Guess is required'
+        }), 400
+    
+    guess = data['guess']
+    username = data.get('username')  # For multiplayer games
+    
+    logger.info("Guess request from %s for game %s: %s", 
+               client_ip, game_id[:8], guess)
+    
+    # Check if this is a multiplayer game
+    if game_id in server.games and server.games[game_id].get('game_type') == 'multiplayer':
+        if not username:
+            return jsonify({
+                'success': False,
+                'error': 'Username is required for multiplayer games'
+            }), 400
+        
+        # Process multiplayer guess
+        state, error_msg = server.make_guess_multiplayer(game_id, username, guess)
+        if state is None:
+            return jsonify({
+                'success': False,
+                'error': error_msg
+            }), 400
+    else:
+        # Process single player guess (original logic)
+        is_valid, error = server.is_valid_guess(game_id, guess)
+        if not is_valid:
+            logger.warning("Invalid guess from %s for game %s: %s - %s", 
+                          client_ip, game_id[:8], guess, error)
+            return jsonify({
+                'success': False,
+                'error': error
+            }), 400
+        
+        state = server.make_guess(game_id, guess)
+        if state is None:
+            logger.error("Failed to process guess from %s for game %s: %s", 
+                        client_ip, game_id[:8], guess)
+            return jsonify({
+                'success': False,
+                'error': 'Failed to process guess'
+            }), 500
+    
+    return jsonify({
+        'success': True,
+        'state': asdict(state)
+    })
+
+
+# Override existing state endpoint to handle both single and multiplayer
+@app.route('/api/game/<game_id>/state', methods=['GET'])
+def get_state_endpoint(game_id):
+    """Get current game state (supports both single and multiplayer)."""
+    client_ip = request.remote_addr
+    username = request.args.get('username')  # For multiplayer games
+    
+    logger.info("Game state request from %s for game %s", client_ip, game_id[:8])
+    
+    # Check if this is a multiplayer game
+    if game_id in server.games and server.games[game_id].get('game_type') == 'multiplayer':
+        if not username:
+            return jsonify({
+                'success': False,
+                'error': 'Username is required for multiplayer games'
+            }), 400
+        
+        state = server.get_multiplayer_game_state(game_id, username)
+    else:
+        # Original single player logic
+        state = server.get_game_state(game_id)
+    
+    if state is None:
+        logger.warning("Game state request for non-existent game %s from %s", 
+                      game_id[:8], client_ip)
+        return jsonify({
+            'success': False,
+            'error': 'Game not found'
+        }), 404
+    
+    return jsonify({
+        'success': True,
+        'state': asdict(state)
     })
 
 

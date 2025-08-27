@@ -1,7 +1,7 @@
 """
 Wordle Game Client - Client-side GUI and Server Communication
 
-This module implements the client-side interface for the server-client Wordle architecture.
+This module implements the client-side interface for the *SINGLE PLAYER* server-client Wordle architecture.
 The client handles UI interactions and communicates with the server for game logic,
 without having access to the answer until game completion.
 
@@ -11,7 +11,6 @@ import tkinter as tk
 from tkinter import messagebox
 import tkinter.font as tkFont
 import requests
-import json
 from typing import Dict, List, Optional
 from enum import Enum
 
@@ -32,9 +31,10 @@ class WordleClient:
     for game state, validation, and guess submission without accessing game secrets.
     """
     
-    def __init__(self, root, server_url="http://127.0.0.1:5000"):
+    def __init__(self, root, server_url="http://127.0.0.1:5000", on_exit=None):
         self.root = root
         self.server_url = server_url
+        self.on_exit = on_exit
         self.game_id = None
         self.current_input = ""
         self.game_state = None
@@ -454,15 +454,109 @@ class WordleClient:
             message = f"Game Over!\n\nThe word was: {self.game_state['answer']}\n\nBetter luck next time!"
             title = "Game Over"
         
-        result = messagebox.askquestion(
-            title,
-            message + "\n\nWould you like to play again?",
-            icon="question"
-        )
+        # Create a custom dialog with multiple options
+        dialog = tk.Toplevel(self.root)
+        dialog.title(title)
+        dialog.geometry("400x250")
+        dialog.resizable(False, False)
+        dialog.configure(bg="#ffffff")
+        dialog.transient(self.root)
+        dialog.grab_set()
         
-        if result == "yes":
+        # Center the dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (200)
+        y = (dialog.winfo_screenheight() // 2) - (125)
+        dialog.geometry(f"+{x}+{y}")
+        
+        # Message frame
+        msg_frame = tk.Frame(dialog, bg="#ffffff")
+        msg_frame.pack(expand=True, fill="both", padx=20, pady=20)
+        
+        # Title label
+        title_label = tk.Label(
+            msg_frame,
+            text=title,
+            font=("Arial", 16, "bold"),
+            fg="#333333",
+            bg="#ffffff"
+        )
+        title_label.pack(pady=(0, 10))
+        
+        # Message label
+        msg_label = tk.Label(
+            msg_frame,
+            text=message,
+            font=("Arial", 12),
+            fg="#666666",
+            bg="#ffffff",
+            justify="center"
+        )
+        msg_label.pack(pady=(0, 20))
+        
+        # Button frame
+        button_frame = tk.Frame(msg_frame, bg="#ffffff")
+        button_frame.pack(fill="x")
+        
+        def play_again():
+            dialog.destroy()
             max_rounds = self.game_state['max_rounds'] if self.game_state else None
             self.start_new_game(max_rounds)
+        
+        def return_to_menu():
+            dialog.destroy()
+            if self.on_exit:
+                self.on_exit()
+        
+        def quit_game():
+            dialog.destroy()
+            self.root.quit()
+        
+        # Play Again button
+        tk.Button(
+            button_frame,
+            text="Play Again",
+            font=("Arial", 11, "bold"),
+            bg="#6aaa64",
+            fg="white",
+            relief="flat",
+            borderwidth=0,
+            padx=20,
+            pady=10,
+            command=play_again,
+            cursor="hand2"
+        ).pack(side="left", padx=(0, 10), fill="x", expand=True)
+        
+        # Main Menu button (only if callback available)
+        if self.on_exit:
+            tk.Button(
+                button_frame,
+                text="Main Menu",
+                font=("Arial", 11, "bold"),
+                bg="#787c7e",
+                fg="white",
+                relief="flat",
+                borderwidth=0,
+                padx=20,
+                pady=10,
+                command=return_to_menu,
+                cursor="hand2"
+            ).pack(side="left", padx=(0, 10), fill="x", expand=True)
+        
+        # Quit button
+        tk.Button(
+            button_frame,
+            text="Quit",
+            font=("Arial", 11, "bold"),
+            bg="#d32f2f",
+            fg="white",
+            relief="flat",
+            borderwidth=0,
+            padx=20,
+            pady=10,
+            command=quit_game,
+            cursor="hand2"
+        ).pack(side="left", fill="x", expand=True)
     
     def recreate_game_board(self):
         """Recreate the game board when settings change."""
@@ -475,6 +569,12 @@ class WordleClient:
         
         # Update window size
         self.update_window_size()
+    
+    def destroy(self):
+        """Clean up the single player client."""
+        if hasattr(self, 'root'):
+            for widget in self.root.winfo_children():
+                widget.destroy()
     
     def on_key_press(self, event):
         """Handle keyboard input."""
